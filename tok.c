@@ -21,12 +21,6 @@ typedef struct {
 	int count, index;
 } Entry;
 
-static void *xcalloc(size_t n, size_t size) {
-	void *p = calloc(n, size);
-	if (p == NULL && n > 0 && size > 0) err(1, "calloc");
-	return p;
-}
-
 static char *slurp(const char *path) {
 	FILE *f = fopen(path, "rb");
 	if (f == NULL) err(1, "%s", path);
@@ -36,7 +30,8 @@ static char *slurp(const char *path) {
 	if (n < 0) err(1, "%s", path);
 
 	rewind(f);
-	char *s = xcalloc(n + 1, 1);
+	char *s = calloc(n + 1, 1);
+	if (s == NULL) err(1, "calloc");
 	if (fread(s, 1, n, f) != (size_t)n) errx(1, "%s: short read", path);
 
 	fclose(f);
@@ -92,9 +87,13 @@ static int *cut(char *text, Words *t, Corpus *c) {
 		if (!issep(p[0]) && issep(p[1])) nword++;
 		if (*p == '\n') nline++;
 	}
+	if (nword == 0) return NULL;
 
-	int *w = xcalloc(nword, sizeof *w);
-	c->start = xcalloc(nline + 1, sizeof *c->start);
+	int *w = calloc(nword, sizeof *w);
+	if (w == NULL) err(1, "calloc");
+
+	c->start = calloc(nline + 1, sizeof *c->start);
+	if (c->start == NULL) err(1, "calloc");
 	for (char *p = text;; p++) {
 		char *word = p;
 		while (!issep(*p)) p++;
@@ -119,17 +118,20 @@ static int *foldinto(Words *t, const int *w, int nw, const Fold *fold, int *fold
 	int target[MAXFOLD];
 	for (int k = 0; k < fold->n; k++) {
 		size_t n = strlen(fold->prefix[k]) + 2;
-		char *q = xcalloc(n, 1);
+		char *q = calloc(n, 1);
+		if (q == NULL) err(1, "calloc");
 
 		snprintf(q, n, "%s?", fold->prefix[k]);
 		target[k] = intern(t, q);
 		if (t->word[target[k]] != q) free(q);
 	}
 
-	int *seen = xcalloc(t->n, sizeof *seen);
+	int *seen = calloc(t->n, sizeof *seen);
+	if (seen == NULL) err(1, "calloc");
 	for (int i = 0; i < nw; i++) seen[w[i]]++;
 
-	int *into = xcalloc(t->n, sizeof *into);
+	int *into = calloc(t->n, sizeof *into);
+	if (into == NULL) err(1, "calloc");
 	for (int i = 0; i < t->n; i++) {
 		into[i] = i;
 		if (seen[i] >= fold->min || strchr(t->word[i], '?') != NULL) continue;
@@ -146,19 +148,24 @@ static int *foldinto(Words *t, const int *w, int nw, const Fold *fold, int *fold
 
 // number gives each word left after folding an ID
 static void number(Corpus *c, const Words *t, const int *w, const int *into) {
-	int *total = xcalloc(t->n, sizeof *total);
+	int *total = calloc(t->n, sizeof *total);
+	if (total == NULL) err(1, "calloc");
 	for (int i = 0; i < c->nids; i++) total[into[w[i]]]++;
 
-	Entry *e = xcalloc(t->n, sizeof *e);
+	Entry *e = calloc(t->n, sizeof *e);
+	if (e == NULL) err(1, "calloc");
 	for (int i = 0; i < t->n; i++)
 		if (total[i] > 0) e[c->nvocab++] = (Entry){t->word[i], total[i], i};
 	if (c->nvocab > MAXVOCAB) errx(1, "a vocab of %d words; IDs are uint16, so %d at most", c->nvocab, MAXVOCAB);
 	qsort(e, c->nvocab, sizeof *e, bycount);
 
 	// Allocate memory for the ID array and the vocabulary arrays
-	int *id = xcalloc(t->n, sizeof *id);
-	c->vocab = xcalloc(c->nvocab, sizeof *c->vocab);
-	c->count = xcalloc(c->nvocab, sizeof *c->count);
+	int *id = calloc(t->n, sizeof *id);
+	if (id == NULL) err(1, "calloc");
+	c->vocab = calloc(c->nvocab, sizeof *c->vocab);
+	if (c->vocab == NULL) err(1, "calloc");
+	c->count = calloc(c->nvocab, sizeof *c->count);
+	if (c->count == NULL) err(1, "calloc");
 
 	// Map each word to its ID, and store the word and its count
 	for (int v = 0; v < c->nvocab; v++) {
@@ -167,7 +174,8 @@ static void number(Corpus *c, const Words *t, const int *w, const int *into) {
 		c->count[v] = e[v].count;
 	}
 
-	c->ids = xcalloc(c->nids, sizeof *c->ids);
+	c->ids = calloc(c->nids, sizeof *c->ids);
+	if (c->ids == NULL) err(1, "calloc");
 	for (int i = 0; i < c->nids; i++) c->ids[i] = id[into[w[i]]];
 
 	free(total);
@@ -178,7 +186,8 @@ static void number(Corpus *c, const Words *t, const int *w, const int *into) {
 // corpus_load loads the corpus from a file and folds it according to the given fold configuration
 Corpus corpus_load(const char *path, const Fold *fold) {
 	Corpus c = {0};
-	Words *t = xcalloc(1, sizeof *t);
+	Words *t = calloc(1, sizeof *t);
+	if (t == NULL) err(1, "calloc");
 	char *text = slurp(path); // the words point into it, so it's never freed
 
 	int *w = cut(text, t, &c);
@@ -211,11 +220,12 @@ void corpus_report(const Corpus *c, const Fold *fold, FILE *out) {
 	}
 	fputc('\n', out);
 
-	int *len = xcalloc(c->nseq, sizeof *len);
+	int *len = calloc(c->nseq, sizeof *len);
+	if (len == NULL) err(1, "calloc");
 	int nval = 0;
 	for (int s = 0; s < c->nseq; s++) {
 		len[s] = c->start[s + 1] - c->start[s];
-		if (s % VALEVERY == VALEVERY - 1) nval += len[s];
+		if (corpus_isval(s)) nval += len[s];
 	}
 	qsort(len, c->nseq, sizeof *len, byint);
 

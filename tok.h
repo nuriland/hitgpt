@@ -24,6 +24,9 @@ typedef struct {
 	int folded[MAXFOLD]; // words folded under each prefix
 } Corpus;
 
+// corpus_isval says whether sequence s is held out for validation
+static inline int corpus_isval(int s) { return s % VALEVERY == VALEVERY - 1; }
+
 Corpus corpus_load(const char *path, const Fold *fold);
 
 void corpus_report(const Corpus *c, const Fold *fold, FILE *f);
