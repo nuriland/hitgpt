@@ -114,7 +114,17 @@ static int bigram(int argc, char **argv) {
 	return 0;
 }
 
-// forward builds a model and embeds the start of the first sequence
+static void printstats(const char *name, const float *p, int n) {
+	double sum = 0, sumsq = 0;
+	for (int i = 0; i < n; i++) {
+		sum += p[i];
+		sumsq += p[i] * p[i];
+	}
+	double mean = sum / n;
+	printf("%s: mean %+.5f, std %.5f\n", name, mean, sqrt(sumsq / n - mean * mean));
+}
+
+// forward builds a model, embeds the start of the first sequence and puts it through the final LayerNorm
 static int forward(int argc, char **argv) {
 	Args a = parse(argc, argv, "m:f:C:T:s:");
 	if (a.width < 1 || a.context < 1) errx(1, "-C and -T must be at least 1");
@@ -124,34 +134,41 @@ static int forward(int argc, char **argv) {
 	Config cfg = {.V = c.nvocab, .C = a.width, .T = a.context};
 	Model m = model_init(cfg, a.seed);
 
-	double sum = 0, sumsq = 0;
-	for (int i = 0; i < m.nparams; i++) {
-		sum += m.params[i];
-		sumsq += m.params[i] * m.params[i];
-	}
-	double mean = sum / m.nparams;
-	double std = sqrt(sumsq / m.nparams - mean * mean);
 	printf("model: V %d, C %d, T %d, seed %d\n", cfg.V, cfg.C, cfg.T, a.seed);
-	printf("params: %d (wte %d, wpe %d), mean %+.5f, std %.5f\n", m.nparams, cfg.V * cfg.C, cfg.T * cfg.C, mean, std);
+	printf("params: %d (wte %d, wpe %d, lnf %d)\n", m.nparams, cfg.V * cfg.C, cfg.T * cfg.C, 2 * cfg.C);
+	printstats("wte", m.wte, cfg.V * cfg.C);
+	printstats("wpe", m.wpe, cfg.T * cfg.C);
 
 	const int example = 11; // the words in LEARN.md §5's example
 	int n = c.start[1] - c.start[0];
 	if (n > example) n = example;
 	if (n > cfg.T) n = cfg.T;
+
 	float *x = calloc((size_t)n * cfg.C, sizeof *x);
 	if (x == NULL) err(1, "calloc");
-	model_embed(&m, c.ids + c.start[0], n, x);
+	float *y = calloc((size_t)n * cfg.C, sizeof *y);
+	if (y == NULL) err(1, "calloc");
 
-	printf("\nthe first sequence, embedded: the first numbers of each vector, and its length\n");
-	printf("(the length should be about 0.02 * sqrt(2C) = %.3f)\n", 0.02 * sqrt(2.0 * cfg.C));
+	model_embed(&m, c.ids + c.start[0], n, x);
+	layernorm(y, x, m.lnfw, m.lnfb, n, cfg.C);
+
+	printf("\nthe first sequence, embedded, then through the final LayerNorm\n");
+	printf("  t  word          |x|   after LayerNorm: the first numbers     mean     std    |y|\n");
 	for (int t = 0; t < n; t++) {
-		const float *v = x + t * cfg.C;
-		double len = 0;
-		for (int i = 0; i < cfg.C; i++) len += v[i] * v[i];
-		printf("%3d  %-12s", t, c.vocab[c.ids[c.start[0] + t]]);
+		const float *u = x + t * cfg.C;
+		const float *v = y + t * cfg.C;
+		double xlen = 0, ysum = 0, ylen = 0;
+		for (int i = 0; i < cfg.C; i++) {
+			xlen += u[i] * u[i];
+			ysum += v[i];
+			ylen += v[i] * v[i];
+		}
+		double ym = ysum / cfg.C;
+		printf("%3d  %-12s %.3f  ", t, c.vocab[c.ids[c.start[0] + t]], sqrt(xlen));
 		for (int i = 0; i < 4 && i < cfg.C; i++) printf(" %+.4f", v[i]);
-		printf("  |x| %.3f\n", sqrt(len));
+		printf("   %+.4f  %.4f  %.3f\n", ym, sqrt(ylen / cfg.C - ym * ym), sqrt(ylen));
 	}
+	free(y);
 	free(x);
 	return 0;
 }
