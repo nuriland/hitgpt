@@ -124,12 +124,14 @@ static void printstats(const char *name, const float *p, int n) {
 	printf("%s: mean %+.5f, std %.5f\n", name, mean, sqrt(sumsq / n - mean * mean));
 }
 
-// forward builds a model, embeds the start of the first sequence and puts it through the final LayerNorm
+// forward builds an untrained model and scores it on the val sequences
 static int forward(int argc, char **argv) {
 	Args a = parse(argc, argv, "m:f:C:T:s:");
 	if (a.width < 1 || a.context < 1) errx(1, "-C and -T must be at least 1");
+
 	Corpus c = corpus_load(a.path, &a.fold);
 	corpus_report(&c, &a.fold, stderr);
+	if (c.nseq < VALEVERY) errx(1, "%s: %d sequences, and the val split needs %d", a.path, c.nseq, VALEVERY);
 
 	Config cfg = {.V = c.nvocab, .C = a.width, .T = a.context};
 	Model m = model_init(cfg, a.seed);
@@ -139,37 +141,22 @@ static int forward(int argc, char **argv) {
 	printstats("wte", m.wte, cfg.V * cfg.C);
 	printstats("wpe", m.wpe, cfg.T * cfg.C);
 
-	const int example = 11; // the words in LEARN.md §5's example
-	int n = c.start[1] - c.start[0];
-	if (n > example) n = example;
-	if (n > cfg.T) n = cfg.T;
+	double loss = model_loss(&m, &c);
+	printf("\nval loss %.3f, perplexity %.1f (uniform guessing: %.3f)\n", loss, exp(loss), log(cfg.V));
 
-	float *x = calloc((size_t)n * cfg.C, sizeof *x);
-	if (x == NULL) err(1, "calloc");
-	float *y = calloc((size_t)n * cfg.C, sizeof *y);
-	if (y == NULL) err(1, "calloc");
+	const int example = 11;
+	const uint16_t *ids = c.ids + c.start[0];
+	if (c.start[1] - c.start[0] > example && example <= cfg.T) {
+		float *logits = calloc((size_t)example * cfg.V, sizeof *logits);
+		if (logits == NULL) err(1, "calloc");
 
-	model_embed(&m, c.ids + c.start[0], n, x);
-	layernorm(y, x, m.lnfw, m.lnfb, n, cfg.C);
+		model_forward(&m, ids, example, logits);
+		double p = exp(logprob(logits + (example - 1) * cfg.V, cfg.V, ids[example]));
+		printf("after the example's %s, p(%s) = %.4f (1/V = %.4f)\n",
+			c.vocab[ids[example - 1]], c.vocab[ids[example]], p, 1.0 / cfg.V);
 
-	printf("\nthe first sequence, embedded, then through the final LayerNorm\n");
-	printf("  t  word          |x|   after LayerNorm: the first numbers     mean     std    |y|\n");
-	for (int t = 0; t < n; t++) {
-		const float *u = x + t * cfg.C;
-		const float *v = y + t * cfg.C;
-		double xlen = 0, ysum = 0, ylen = 0;
-		for (int i = 0; i < cfg.C; i++) {
-			xlen += u[i] * u[i];
-			ysum += v[i];
-			ylen += v[i] * v[i];
-		}
-		double ym = ysum / cfg.C;
-		printf("%3d  %-12s %.3f  ", t, c.vocab[c.ids[c.start[0] + t]], sqrt(xlen));
-		for (int i = 0; i < 4 && i < cfg.C; i++) printf(" %+.4f", v[i]);
-		printf("   %+.4f  %.4f  %.3f\n", ym, sqrt(ylen / cfg.C - ym * ym), sqrt(ylen));
+		free(logits);
 	}
-	free(y);
-	free(x);
 	return 0;
 }
 

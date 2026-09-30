@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "tok.h"
+
 typedef struct {
 	int V; // vocab size
 	int C; // width, the numbers per vector
@@ -23,9 +25,12 @@ typedef struct {
 // LayerNorm at Y = 1 and B = 0. The same seed gives the same weights.
 Model model_init(Config cfg, uint64_t seed);
 
-// model_embed turns n ids, n <= T, into n vectors of C numbers each: x[t] = wte[id] + wpe[t].
-void model_embed(const Model *m, const uint16_t *ids, int n, float *x);
+// model_forward runs n ids, n <= T, through the model, giving n rows of V logits.
+// At each position, it gives a score for every word being the next one.
+void model_forward(const Model *m, const uint16_t *ids, int n, float *logits);
 
-// layernorm normalizes each of n vectors of C numbers on its own, to mean 0 and standard deviation 1, 
-// then scales it by w and shifts it by b.
-void layernorm(float *out, const float *x, const float *w, const float *b, int n, int C);
+// logprob is ln p[target] under the softmax of V logits.
+double logprob(const float *logits, int V, int target);
+
+// model_loss is the mean -ln p[the real next word] over the val sequences, each fed on its own from its first word
+double model_loss(const Model *m, const Corpus *c);
